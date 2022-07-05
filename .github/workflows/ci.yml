@@ -46,7 +46,7 @@ jobs:
           ### Install rust stable from rustup  ##############################
           su "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
           whoami
-          echo $HOME
+          echo "$HOME"
           fetch -o /tmp/rustup.sh https://sh.rustup.rs
           time sh /tmp/rustup.sh -y --profile=minimal
           . $HOME/.cargo/env
@@ -66,7 +66,8 @@ jobs:
           FAULT=0
           RUSTFLAGS="-C debuginfo=0" time \
             cargo build --features "${{ matrix.job.features }}" || FAULT=1
-          #time cargo test --features "${{ matrix.job.features }}" || FAULT=1
+          #RUSTFLAGS="-C debuginfo=0" time \
+          #  cargo test --features "${{ matrix.job.features }}" || FAULT=1
           if [ "$FAULT" -eq 0 ]; then
             # save build time by avoiding "cargo install"
             cp -a target/debug/sccache target/debug/sccache-dist \
@@ -168,6 +169,7 @@ jobs:
           #
           su "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
           whoami
+          cd "$HOME"
           #
           echo "Wait for build server to become available"
           count=0
