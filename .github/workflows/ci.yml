@@ -44,7 +44,7 @@ jobs:
           zdev=$(mdconfig -a -t vnode -S 4096 -f /zfs1)
           zpool create -f potpool "$zdev"
           sysrc -f /usr/local/etc/pot/pot.conf POT_ZFS_ROOT=potpool/pot
-          sysrc -f /usr/local/etc/pot/pot.conf POT_EXTIF=en0
+          sysrc -f /usr/local/etc/pot/pot.conf POT_EXTIF=em0
           ifconfig
           pot init
           pot create -p sccache-template -N alias -i "lo0|127.0.0.2" -t single -b "$OS_VERSION"
