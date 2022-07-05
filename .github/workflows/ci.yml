@@ -60,8 +60,8 @@ jobs:
           #
           cd "$WORKSPACE"
           FAULT=0
-          cargo build --features "${{ matrix.job.features }}" || FAULT=1
-          cargo test --features "${{ matrix.job.features }}" || FAULT=1
+          RUSTFLAGS="-C debuginfo=0" cargo build --features "${{ matrix.job.features }}" || FAULT=1
+          #cargo test --features "${{ matrix.job.features }}" || FAULT=1
           if [ "$FAULT" -eq 0 ]; then
             # save build time by avoiding "cargo install"
             cp -a target/debug/sccache target/debug/sccache-dist $HOME/.cargo/bin/.
@@ -165,11 +165,16 @@ jobs:
           count=0
           while [ "$(sockstat -q4l -p 10501 | wc -l | xargs)" -eq "0" ]; do
             count=$(( count + 1 ))
-            if [ $count -gt 90 ]; then
+            if [ $count -gt 60 ]; then
                2>&1 echo "Build server did not become available"
                exit 1
             fi
-            sleep 2
+            sleep 5
+            ps -axww
+            sockstat -l
+            for name in /tmp/*.conf; do
+              echo $name; cat $name
+            done
           done
 
           # create test project
