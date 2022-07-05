@@ -143,7 +143,6 @@ jobs:
           echo "Starting scheduler"
           #
           sccache-dist scheduler --config /tmp/scheduler.conf
-          sleep 3
           EOH
           #
           whoami
@@ -180,11 +179,6 @@ jobs:
                exit 1
             fi
             sleep 5
-            ps -axww
-            sockstat -l
-            for name in /tmp/*.conf; do
-              echo $name; cat $name
-            done
           done
           #
           ### Create test project to test sccache-dist with ##################
@@ -259,7 +253,6 @@ jobs:
           ### Do root user cleanup
           killall sccache-dist || true
           wait $BUILD_SERVER_PID || true
-          sleep 2
           #
           ### Finished
           echo "Done"
