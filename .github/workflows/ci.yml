@@ -257,7 +257,6 @@ jobs:
 
   test_freebsd:
     name: Tests/FreeBSD test suite
-    needs: [ lint ]
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
