@@ -48,7 +48,7 @@ jobs:
           whoami
           echo "$HOME"
           fetch -o /tmp/rustup.sh https://sh.rustup.rs
-          time sh /tmp/rustup.sh -y --profile=minimal
+          sh /tmp/rustup.sh -y --profile=minimal
           . $HOME/.cargo/env
           #
           ### Output some information about the environment  ################
@@ -64,9 +64,9 @@ jobs:
           ### Build project and run unit tests ##############################
           cd "$WORKSPACE"
           FAULT=0
-          RUSTFLAGS="-C debuginfo=0" time \
+          RUSTFLAGS="-C debuginfo=0" \
             cargo build --features "${{ matrix.job.features }}" || FAULT=1
-          #RUSTFLAGS="-C debuginfo=0" time \
+          #RUSTFLAGS="-C debuginfo=0" \
           #  cargo test --features "${{ matrix.job.features }}" || FAULT=1
           if [ "$FAULT" -eq 0 ]; then
             # save build time by avoiding "cargo install"
@@ -154,7 +154,7 @@ jobs:
           sysrc -f /usr/local/etc/pot/pot.conf POT_ZFS_ROOT=potpool/pot
           sysrc -f /usr/local/etc/pot/pot.conf POT_EXTIF="$PUB_INTF"
           pot init
-          time pot create -p sccache-template -N alias -i "lo0|127.0.0.2" \
+          pot create -p sccache-template -N alias -i "lo0|127.0.0.2" \
             -t single -b "$OS_VERSION"
           pot set-cmd -p sccache-template -c /usr/bin/true
           pot set-attr -p sccache-template -A no-rc-script -V YES
@@ -188,12 +188,12 @@ jobs:
           #
           ### Start sccache server ###########################################
           SCCACHE_ERROR_LOG=/tmp/sccache_log.txt SCCACHE_LOG=info \
-            SCCACHE_NO_DAEMON=1 RUST_LOG=info sccache --start-server
+            RUST_LOG=info sccache --start-server &
           SERVER_PID=$!
           echo "SERVER PID IS: $SERVER_PID"
           #
           ### First build with sccache-dist ##################################
-          RUSTC_WRAPPER=sccache time cargo build
+          RUSTC_WRAPPER=sccache cargo build
           STATS="$(sccache -s)"
           echo "Statistics of first buildtest"
           echo "$STATS"
@@ -220,7 +220,7 @@ jobs:
           ### Second build with sccache-dist #################################
           sccache -z
           cargo clean
-          RUSTC_WRAPPER=sccache time cargo build
+          RUSTC_WRAPPER=sccache cargo build
           STATS="$(sccache -s)"
           echo "Statistics of second buildtest"
           echo "$STATS"
