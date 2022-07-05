@@ -42,7 +42,7 @@ jobs:
           whoami
 
           #
-          su -l "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
+          su "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
           whoami
           echo $HOME
           fetch -o /tmp/rustup.sh https://sh.rustup.rs
@@ -158,7 +158,7 @@ jobs:
             RUST_LOG=info $TEST_USER_HOME/.cargo/bin/sccache-dist server --config /tmp/server.conf &
           BUILD_SERVER_PID=$!
 
-          su -l "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
+          su "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
           whoami
 
           echo "Wait for build server to become available"
