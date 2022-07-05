@@ -27,9 +27,6 @@ jobs:
           # * NOTE: All steps need to be run in this block, otherwise, we are operating back on the mac host
           set -exo pipefail
           #
-          # This sometimes fails in the image, so let's do it again
-          ntpdate pool.ntp.org
-          #
           ### Basic user setup ##############################################
           TEST_USER=tester
           TEST_USER_HOME="/opt/$TEST_USER"
@@ -45,7 +42,7 @@ jobs:
           chown -R "$TEST_USER":"$TEST_USER" "$TEST_USER_HOME"
           chown -R "$TEST_USER":"$TEST_USER" "/$WORKSPACE_PARENT"/
           whoami
-
+          #
           ### Install rust stable from rustup  ##############################
           su "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
           whoami
@@ -53,7 +50,7 @@ jobs:
           fetch -o /tmp/rustup.sh https://sh.rustup.rs
           time sh /tmp/rustup.sh -y --profile=minimal
           . $HOME/.cargo/env
-
+          #
           ### Output some information about the environment  ################
           # environment
           echo "## environment"
@@ -63,7 +60,7 @@ jobs:
           cargo -V
           rustc -V
           pkg info
-
+          #
           ### Build project and run unit tests ##############################
           cd "$WORKSPACE"
           FAULT=0
@@ -78,13 +75,13 @@ jobs:
           # Clean to avoid to rsync back the files
           cargo clean
           if [ $FAULT -ne 0 ]; then exit 1; fi
-
+          #
           ### Prepare sccache-dist tests ####################################
           echo "Prepare sccache-dist tests"
-
+          #
           SECRET_KEY="$(sccache-dist auth generate-jwt-hs256-key)"
           CLIENT_AUTH_KEY="$(sccache-dist auth generate-jwt-hs256-key)"
-
+          #
           # create scheduler.conf
           cat >/tmp/scheduler.conf <<EOF
           public_addr = "127.0.0.1:10600"
@@ -95,11 +92,11 @@ jobs:
           type = "jwt_hs256"
           secret_key = "$SECRET_KEY"
           EOF
-
+          #
           SERVER_TOKEN="$(sccache-dist auth generate-jwt-hs256-server-token \
             --config=/tmp/scheduler.conf --secret-key="$SECRET_KEY" \
             --server="127.0.0.1:10501")"
-
+          #
           # Create server.conf
           cat >/tmp/server.conf <<EOF
           cache_dir = "/tmp/toolchains"
@@ -111,7 +108,7 @@ jobs:
           type = "jwt_token"
           token = "$SERVER_TOKEN"
           EOF
-
+          #
           # create sccache client config
           TC="$(rustup toolchain list | grep default | awk '{ print $1 }')"
           RUSTC_PATH="$HOME/.rustup/toolchains/$TC/bin/rustc"
@@ -121,38 +118,35 @@ jobs:
           scheduler_url = "http://127.0.0.1:10600"
           toolchain_cache_size = 5368709120
           cache_dir = "$HOME/.cache/sccache-dist-client"
-
           [dist.auth]
           type = "token"
           token = "$CLIENT_AUTH_KEY"
-
           [[dist.toolchains]]
           type = "path_override"
           compiler_executable = "/usr/bin/cc"
           archive = "$HOME/.config/sccache/empty.tar.gz"
           archive_compiler_executable = "/usr/bin/cc"
-
           [[dist.toolchains]]
           type = "path_override"
           compiler_executable = "$RUSTC_PATH"
           archive = "$HOME/.config/sccache/rust-toolchain.tgz"
           archive_compiler_executable = "$RUSTC_PATH"
           EOF
-
+          #
           echo "Creating toolchain tarballs"
           gtar cvf - --files-from /dev/null | gzip -n \
             >$HOME/.config/sccache/empty.tar.gz
           gtar cf - --sort=name --mtime='2022-06-28 17:35Z' $HOME/.rustup  | \
             gzip -n >$HOME/.config/sccache/rust-toolchain.tgz
-
+          #
           echo "Starting scheduler"
-
+          #
           sccache-dist scheduler --config /tmp/scheduler.conf
           sleep 3
           EOH
-
+          #
           whoami
-
+          #
           ### Create ZFS pool and configure pot ##############################
           dd if=/dev/zero of=/zfs1 bs=1 count=1 seek=2G
           zdev=$(mdconfig -a -t vnode -S 4096 -f /zfs1)
@@ -165,16 +159,16 @@ jobs:
           pot set-cmd -p sccache-template -c /usr/bin/true
           pot set-attr -p sccache-template -A no-rc-script -V YES
           pot snapshot -p sccache-template
-
+          #
           echo "Starting build-server (as root)"
           SCCACHE_DIST_LOG=debug RUST_LOG=info \
             $TEST_USER_HOME/.cargo/bin/sccache-dist server \
             --config /tmp/server.conf &
           BUILD_SERVER_PID=$!
-
+          #
           su "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
           whoami
-
+          #
           echo "Wait for build server to become available"
           count=0
           while [ "$(sockstat -q4l -p 10501 | wc -l | xargs)" -eq "0" ]; do
@@ -190,18 +184,18 @@ jobs:
               echo $name; cat $name
             done
           done
-
+          #
           ### Create test project to test sccache-dist with ##################
           cargo init buildtest
           cd buildtest
           echo 'chrono = "0.4"' >>Cargo.toml
-
+          #
           ### Start sccache server ###########################################
           SCCACHE_ERROR_LOG=/tmp/sccache_log.txt SCCACHE_LOG=info \
             SCCACHE_NO_DAEMON=1 RUST_LOG=info sccache --start-server
           SERVER_PID=$!
           echo "SERVER PID IS: $SERVER_PID"
-
+          #
           ### First build with sccache-dist ##################################
           RUSTC_WRAPPER=sccache time cargo build
           STATS="$(sccache -s)"
@@ -213,7 +207,7 @@ jobs:
             | grep "Failed distributed compilations" | awk '{ print $4 }')"
           SUCCEEDED_DIST="$(echo "$STATS" \
             | (grep -F "127.0.0.1:10501" || true) | awk '{ print $2 }')"
-
+          #
           if [ "$CACHE_HITS" -ne 0 ]; then
             2>&1 echo "Unexpected cache hits"
             exit 1
@@ -226,7 +220,7 @@ jobs:
             2>&1 echo "No distributed compilations succeeded"
             exit 1
           fi
-
+          #
           ### Second build with sccache-dist #################################
           sccache -z
           cargo clean
@@ -240,7 +234,7 @@ jobs:
             | grep "Failed distributed compilations" | awk '{ print $4 }')"
           SUCCEEDED_DIST="$(echo "$STATS" \
             | (grep -F "127.0.0.1:10501" || true) | awk '{ print $2 }')"
-
+          #
           if [ "$CACHE_HITS" -eq 0 ]; then
             2>&1 echo "No cache hits when there should be some"
             exit 1
@@ -253,17 +247,17 @@ jobs:
             2>&1 echo "Unexpected distributed compilations happened"
             exit 1
           fi
-
+          #
           ### Do test user cleanup
           sccache --stop-server
           wait $SERVER_PID || true
           killall sccache-dist || true
           EOH
-
+          #
           ### Do root user cleanup
           killall sccache-dist || true
           wait $BUILD_SERVER_PID || true
           sleep 2
-
+          #
           ### Finished
           echo "Done"
