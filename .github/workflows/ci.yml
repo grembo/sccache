@@ -19,20 +19,22 @@ jobs:
       uses: vmactions/freebsd-vm@v0.1.6
       with:
         usesh: true
-        prepare: pkg install -y ca_root_nss gmake gtar pot
+        prepare: pkg install -y curl gmake gtar pot
         run: |
           ## Prepare, build, and test
           # implementation modelled after ref: <https://github.com/rust-lang/rustup/pull/2783>
           # and https://github.com/uutils/coreutils/commit/86c610a84b8b6c
           # * NOTE: All steps need to be run in this block, otherwise, we are operating back on the mac host
-          set -e
+          set -exo pipefail
           #
           TEST_USER=tester
-          TEST_USER_HOME=/tmp/tester
+          TEST_USER_HOME="/opt/$TEST_USER"
           REPO_NAME=${GITHUB_WORKSPACE##*/}
           WORKSPACE_PARENT="/Users/runner/work/${REPO_NAME}"
           WORKSPACE="${WORKSPACE_PARENT}/${REPO_NAME}"
           OS_VERSION="$(freebsd-version | awk -F- '{print $1}')"
+          PUB_INTF="$(netstat -4rn | grep default | awk '{ print $4}')"
+          ifconfig
           #
           mkdir -p "$TEST_USER_HOME"
           pw adduser -n "$TEST_USER" -d "$TEST_USER_HOME" -c "Tester" -h -
@@ -44,17 +46,17 @@ jobs:
           zdev=$(mdconfig -a -t vnode -S 4096 -f /zfs1)
           zpool create -f potpool "$zdev"
           sysrc -f /usr/local/etc/pot/pot.conf POT_ZFS_ROOT=potpool/pot
-          sysrc -f /usr/local/etc/pot/pot.conf POT_EXTIF=em0
-          ifconfig
+          sysrc -f /usr/local/etc/pot/pot.conf POT_EXTIF="$PUB_INTF"
           pot init
           pot create -p sccache-template -N alias -i "lo0|127.0.0.2" -t single -b "$OS_VERSION"
           pot set-cmd -p sccache-template -c /usr/bin/true
           pot set-attr -p sccache-template -A no-rc-script -V YES
           pot snapshot -p sccache-template
+
           #
-          su -l "$TEST_USER"
-          set -e
+          su -l "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
           whoami
+          echo $HOME
           fetch -o /tmp/rustup.sh https://sh.rustup.rs
           sh /tmp/rustup.sh -y --profile=minimal
           . $HOME/.cargo/env
@@ -67,7 +69,7 @@ jobs:
           cargo -V
           rustc -V
           #
-          cd "${WORKSPACE}"
+          cd "$WORKSPACE"
           FAULT=0
           cargo build --features "${{ matrix.job.features }}" || FAULT=1
           cargo test --features "${{ matrix.job.features }}" || FAULT=1
@@ -79,7 +81,154 @@ jobs:
           cargo clean
           if [ $FAULT -ne 0 ]; then exit 1; fi
 
-          # run some tests
-          echo "Run some more tests here"
+          ### run actual tests
+          echo "Run sccache-dist tests"
+
+          SECRET_KEY="$(sccache-dist auth generate-jwt-hs256-key)"
+          CLIENT_AUTH_KEY="$(sccache-dist auth generate-jwt-hs256-key)"
+
+          # create scheduler.conf
+          cat >/tmp/scheduler.conf <<EOF
+          public_addr = "127.0.0.1:10600"
+          [client_auth]
+          type = "token"
+          token = "$CLIENT_AUTH_KEY"
+          [server_auth]
+          type = "jwt_hs256"
+          secret_key = "$SECRET_KEY"
           EOF
+
+          SERVER_TOKEN="$(sccache-dist auth generate-jwt-hs256-server-token \
+            --config=/tmp/scheduler.conf --secret-key="$SECRET_KEY" --server="127.0.0.1:10501")"
+
+          # Create server.conf
+          cat >/tmp/server.conf <<EOF
+          cache_dir = "/tmp/toolchains"
+          public_addr = "127.0.0.1:10501"
+          scheduler_url = "http://127.0.0.1:10600"
+          [builder]
+          type = "pot"
+          [scheduler_auth]
+          type = "jwt_token"
+          token = "$SERVER_TOKEN"
+          EOF
+
+          # create sccache client config
+          mkdir -p "$HOME/.config/sccache"
+          cat >"$HOME/.config/sccache/config" <<EOF
+          [dist]
+          scheduler_url = "http://127.0.0.1:10600"
+          toolchain_cache_size = 5368709120
+          cache_dir = "$HOME/.cache/sccache-dist-client"
+
+          [dist.auth]
+          type = "token"
+          token = "$CLIENT_AUTH_KEY"
+
+          [[dist.toolchains]]
+          type = "path_override"
+          compiler_executable = "/usr/bin/cc"
+          archive = "$HOME/.config/sccache/empty.tar.gz"
+          archive_compiler_executable = "/usr/bin/cc"
+
+          [[dist.toolchains]]
+          type = "path_override"
+          compiler_executable = "$HOME/.rustup/toolchains/stable-x86_64-unknown-freebsd/bin/rustc"
+          archive = "$HOME/.config/sccache/rust-toolchain.tgz"
+          archive_compiler_executable = "$HOME/.rustup/toolchains/stable-x86_64-unknown-freebsd/bin/rustc"
+          EOF
+
+          echo "Creating toolchain tarballs"
+          gtar cvf - --files-from /dev/null | gzip -n >$HOME/.config/sccache/empty.tar.gz
+          gtar cf - --sort=name --mtime='2022-06-28 17:35Z' $HOME/.rustup  | \
+            gzip -n >$HOME/.config/sccache/rust-toolchain.tgz
+
+          echo "Starting scheduler"
+
+          sccache-dist scheduler --config /tmp/scheduler.conf
+          sleep 3
+          EOH
+
+          whoami
+          echo "Starting build-server (as root)"
+          SCCACHE_DIST_ERROR_LOG=/tmp/sccache_server_log.txt SCCACHE_DIST_LOG=debug \
+            RUST_LOG=info $TEST_USER_HOME/.cargo/bin/sccache-dist server --config /tmp/server.conf &
+          BUILD_SERVER_PID=$!
+
+          su -l "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
+          whoami
+
+          echo "Wait for build server to become available"
+          count=0
+          while [ "$(sockstat -q4l -p 10501 | wc -l | xargs)" -eq "0" ]; do
+            count=$(( count + 1 ))
+            if [ $count -gt 90 ]; then
+               2>&1 echo "Build server did not become available"
+               exit 1
+            fi
+            sleep 2
+          done
+
+          # create test project
+          cargo init buildtest
+          cd buildtest
+          echo 'chrono = "0.4"' >>Cargo.toml
+          export RUSTC_WRAPPER=sccache
+          SCCACHE_ERROR_LOG=/tmp/sccache_log.txt SCCACHE_LOG=info \
+            SCCACHE_NO_DAEMON=1 RUST_LOG=info sccache --start-server
+          SERVER_PID=$!
+          echo "SERVER PID IS: $SERVER_PID"
+          cargo build
+          STATS="$(sccache -s)"
+          echo "Statistics of first buildtest"
+          echo "$STATS"
+          CACHE_HITS="$(echo "$STATS" | grep "Cache hits" | grep -v Rust | awk '{ print $3 }')"
+          FAILED_DIST="$(echo "$STATS" | grep "Failed distributed compilations" | awk '{ print $4 }')"
+          SUCCEEDED_DIST="$(echo "$STATS" | (grep -F "127.0.0.1:10501" || true) | awk '{ print $2 }')"
+
+          if [ "$CACHE_HITS" -ne 0 ]; then
+            2>&1 echo "Unexpected cache hits"
+            exit 1
+          fi
+          if [ "$FAILED_DIST" -ne 0 ]; then
+            2>&1 echo "Some distributed compilations failed"
+            exit 1
+          fi
+          if [ "$SUCCEEDED_DIST" -eq 0 ]; then
+            2>&1 echo "No distributed compilations succeeded"
+            exit 1
+          fi
+          sccache -z
+
+          cargo clean
+          cargo build
+          STATS="$(sccache -s)"
+          echo "Statistics of second buildtest"
+          echo "$STATS"
+          CACHE_HITS="$(echo "$STATS" | grep "Cache hits" | grep -v Rust | awk '{ print $3 }')"
+          FAILED_DIST="$(echo "$STATS" | grep "Failed distributed compilations" | awk '{ print $4 }')"
+          SUCCEEDED_DIST="$(echo "$STATS" | (grep -F "127.0.0.1:10501" || true) | awk '{ print $2 }')"
+
+          if [ "$CACHE_HITS" -eq 0 ]; then
+            2>&1 echo "No cache hits when there should be some"
+            exit 1
+          fi
+          if [ "$FAILED_DIST" -ne 0 ]; then
+            2>&1 echo "Some distributed compilations failed"
+            exit 1
+          fi
+          if [ "$SUCCEEDED_DIST" -ne 0 ]; then
+            2>&1 echo "Unexpected distributed compilations happened"
+            exit 1
+          fi
+
+          sccache --stop-server
+          wait $SERVER_PID || true
+          killall sccache-dist || true
+          EOH
+
+          killall sccache-dist || true
+          wait $BUILD_SERVER_PID || true
+          sleep 2
+          echo "Done"
 
