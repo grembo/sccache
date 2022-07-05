@@ -3,7 +3,7 @@ on: [push, pull_request]
 jobs:
   test_freebsd:
     name: Tests/FreeBSD test suite
-    needs: [ min_version, deps ]
+#    needs: [ min_version, deps ]
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
