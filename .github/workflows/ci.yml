@@ -40,18 +40,6 @@ jobs:
           pw adduser -n "$TEST_USER" -d "$TEST_USER_HOME" -c "Tester" -h -
           chown -R "$TEST_USER":"$TEST_USER" "$TEST_USER_HOME" "/$WORKSPACE_PARENT"/
           whoami
-          #
-          ## Create ZFS pool and configure pot
-          dd if=/dev/zero of=/zfs1 bs=1 count=1 seek=2G
-          zdev=$(mdconfig -a -t vnode -S 4096 -f /zfs1)
-          zpool create -f potpool "$zdev"
-          sysrc -f /usr/local/etc/pot/pot.conf POT_ZFS_ROOT=potpool/pot
-          sysrc -f /usr/local/etc/pot/pot.conf POT_EXTIF="$PUB_INTF"
-          pot init
-          pot create -p sccache-template -N alias -i "lo0|127.0.0.2" -t single -b "$OS_VERSION"
-          pot set-cmd -p sccache-template -c /usr/bin/true
-          pot set-attr -p sccache-template -A no-rc-script -V YES
-          pot snapshot -p sccache-template
 
           #
           su -l "$TEST_USER" -c "/bin/sh -exo pipefail" <<"EOH"
@@ -68,6 +56,7 @@ jobs:
           echo "## tooling info"
           cargo -V
           rustc -V
+          pkg info
           #
           cd "$WORKSPACE"
           FAULT=0
@@ -150,6 +139,20 @@ jobs:
           EOH
 
           whoami
+
+          #
+          ## Create ZFS pool and configure pot
+          dd if=/dev/zero of=/zfs1 bs=1 count=1 seek=2G
+          zdev=$(mdconfig -a -t vnode -S 4096 -f /zfs1)
+          zpool create -f potpool "$zdev"
+          sysrc -f /usr/local/etc/pot/pot.conf POT_ZFS_ROOT=potpool/pot
+          sysrc -f /usr/local/etc/pot/pot.conf POT_EXTIF="$PUB_INTF"
+          pot init
+          pot create -p sccache-template -N alias -i "lo0|127.0.0.2" -t single -b "$OS_VERSION"
+          pot set-cmd -p sccache-template -c /usr/bin/true
+          pot set-attr -p sccache-template -A no-rc-script -V YES
+          pot snapshot -p sccache-template
+
           echo "Starting build-server (as root)"
           SCCACHE_DIST_ERROR_LOG=/tmp/sccache_server_log.txt SCCACHE_DIST_LOG=debug \
             RUST_LOG=info $TEST_USER_HOME/.cargo/bin/sccache-dist server --config /tmp/server.conf &
