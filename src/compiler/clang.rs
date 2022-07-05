@@ -21,6 +21,7 @@ use crate::compiler::{gcc, write_temp_file, Cacheable, CompileCommand, CompilerA
 use crate::dist;
 use crate::mock_command::{CommandCreator, CommandCreatorSync, RunCommand};
 use crate::util::{run_input_output, OsStrExt};
+use semver::Version;
 use std::ffi::OsString;
 use std::fs::File;
 use std::future::Future;
@@ -35,6 +36,43 @@ use crate::errors::*;
 pub struct Clang {
     /// true iff this is clang++.
     pub clangplusplus: bool,
+    /// true iff this is Apple's clang(++).
+    pub is_appleclang: bool,
+    /// String from __VERSION__ macro.
+    pub version: Option<String>,
+}
+
+impl Clang {
+    fn is_minversion(&self, major: u64) -> bool {
+        // Apple clang follows its own versioning scheme.
+        if self.is_appleclang {
+            return false;
+        }
+
+        let version_val = match self.version.clone() {
+            Some(version_val) => version_val,
+            None => return false,
+        };
+
+        let version_str = match version_val.split(' ').find(|x| x.contains('.')) {
+            Some(version_str) => version_str,
+            None => return false,
+        };
+
+        let parsed_version = match Version::parse(version_str) {
+            Ok(parsed_version) => parsed_version,
+            Err(e) => return false,
+        };
+
+        parsed_version
+            >= (Version {
+                major,
+                minor: 0,
+                patch: 0,
+                pre: vec![],
+                build: vec![],
+            })
+    }
 }
 
 #[async_trait]
@@ -44,6 +82,9 @@ impl CCompilerImpl for Clang {
     }
     fn plusplus(&self) -> bool {
         self.clangplusplus
+    }
+    fn version(&self) -> Option<String> {
+        self.version.clone()
     }
     fn parse_arguments(
         &self,
@@ -73,6 +114,13 @@ impl CCompilerImpl for Clang {
     where
         T: CommandCreatorSync,
     {
+        let mut ignorable_whitespace_flags = vec!["-P".to_string()];
+
+        // Clang 14 and later support -fminimize-whitespace, which normalizes away non-semantic whitespace which in turn increases cache hit rate.
+        if self.is_minversion(14) {
+            ignorable_whitespace_flags.push("-fminimize-whitespace".to_string())
+        }
+
         gcc::preprocess(
             creator,
             executable,
@@ -82,6 +130,7 @@ impl CCompilerImpl for Clang {
             may_dist,
             self.kind(),
             rewrite_includes_only,
+            ignorable_whitespace_flags,
         )
         .await
     }
@@ -110,6 +159,10 @@ impl CCompilerImpl for Clang {
 counted_array!(pub static ARGS: [ArgInfo<gcc::ArgData>; _] = [
     take_arg!("--serialize-diagnostics", OsString, Separated, PassThrough),
     take_arg!("--target", OsString, Separated, PassThrough),
+    // Note: for clang we must override the dep options from gcc.rs with `CanBeSeparated`.
+    take_arg!("-MF", PathBuf, CanBeSeparated, DepArgumentPath),
+    take_arg!("-MQ", OsString, CanBeSeparated, DepTarget),
+    take_arg!("-MT", OsString, CanBeSeparated, DepTarget),
     take_arg!("-Xclang", OsString, Separated, XClang),
     take_arg!("-add-plugin", OsString, Separated, PassThrough),
     take_arg!("-debug-info-kind", OsString, Concatenated('='), PassThrough),
@@ -132,6 +185,7 @@ counted_array!(pub static ARGS: [ArgInfo<gcc::ArgData>; _] = [
     take_arg!("-include-pch", PathBuf, CanBeSeparated, PreprocessorArgumentPath),
     take_arg!("-load", PathBuf, Separated, ExtraHashFile),
     take_arg!("-mllvm", OsString, Separated, PassThrough),
+    flag!("-no-opaque-pointers", PreprocessorArgumentFlag),
     take_arg!("-plugin-arg", OsString, Concatenated('-'), PassThrough),
     take_arg!("-target", OsString, Separated, PassThrough),
     flag!("-verify", PreprocessorArgumentFlag),
@@ -173,6 +227,8 @@ mod test {
         let arguments = arguments.iter().map(OsString::from).collect::<Vec<_>>();
         Clang {
             clangplusplus: false,
+            is_appleclang: false,
+            version: None,
         }
         .parse_arguments(&arguments, &std::env::current_dir().unwrap())
     }
@@ -221,6 +277,26 @@ mod test {
             "foo.o"
         );
         parses!("-c", "foo.c", "-gcc-toolchain", "somewhere", "-o", "foo.o");
+    }
+
+    #[test]
+    fn test_parse_clang_short_dependency_arguments_can_be_separated() {
+        let args = vec!["-MF", "-MT", "-MQ"];
+        let formats = vec![
+            "foo.c.d",
+            "\"foo.c.d\"",
+            "=foo.c.d",
+            "./foo.c.d",
+            "/somewhere/foo.c.d",
+        ];
+
+        for arg in args {
+            for format in &formats {
+                let parsed_separated = parses!("-c", "foo.c", "-MD", arg, format);
+                let parsed = parses!("-c", "foo.c", "-MD", format!("{arg}{format}"));
+                assert_eq!(parsed.dependency_args, parsed_separated.dependency_args);
+            }
+        }
     }
 
     #[test]
@@ -392,6 +468,19 @@ mod test {
     fn test_parse_xclang_verify() {
         let a = parses!("-c", "foo.c", "-o", "foo.o", "-Xclang", "-verify");
         assert_eq!(ovec!["-Xclang", "-verify"], a.preprocessor_args);
+    }
+
+    #[test]
+    fn test_parse_xclang_no_opaque_pointers() {
+        let a = parses!(
+            "-c",
+            "foo.c",
+            "-o",
+            "foo.o",
+            "-Xclang",
+            "-no-opaque-pointers"
+        );
+        assert_eq!(ovec!["-Xclang", "-no-opaque-pointers"], a.preprocessor_args);
     }
 
     #[test]

@@ -273,7 +273,15 @@ fn create_jwt_server_token(
     jwt::encode(header, &ServerJwt { server_id }, &key).map_err(Into::into)
 }
 fn dangerous_insecure_extract_jwt_server_token(server_token: &str) -> Option<ServerId> {
-    jwt::dangerous_insecure_decode::<ServerJwt>(server_token)
+    let validation = {
+        let mut validation = jwt::Validation::default();
+        validation.validate_exp = false;
+        validation.validate_nbf = false;
+        validation.insecure_disable_signature_validation();
+        validation
+    };
+    let dummy_key = jwt::DecodingKey::from_secret(b"secret");
+    jwt::decode::<ServerJwt>(server_token, &dummy_key, &validation)
         .map(|res| res.claims.server_id)
         .ok()
 }
@@ -352,14 +360,12 @@ fn run(command: Command) -> Result<i32> {
                     if secret_key.len() != 256 / 8 {
                         bail!("Size of secret key incorrect")
                     }
-                    let validation = jwt::Validation {
-                        leeway: 0,
-                        validate_exp: false,
-                        validate_nbf: false,
-                        aud: None,
-                        iss: None,
-                        sub: None,
-                        algorithms: vec![jwt::Algorithm::HS256],
+                    let validation = {
+                        let mut validation = jwt::Validation::new(jwt::Algorithm::HS256);
+                        validation.leeway = 0;
+                        validation.validate_exp = false;
+                        validation.validate_nbf = false;
+                        validation
                     };
                     Box::new(move |server_token| {
                         check_jwt_server_token(server_token, &secret_key, &validation)
@@ -457,10 +463,10 @@ fn run(command: Command) -> Result<i32> {
 }
 
 fn init_logging() {
-    if env::var("RUST_LOG").is_ok() {
-        match env_logger::try_init() {
+    if env::var(sccache::LOGGING_ENV).is_ok() {
+        match env_logger::Builder::from_env(sccache::LOGGING_ENV).try_init() {
             Ok(_) => (),
-            Err(e) => panic!("Failed to initalize logging: {:?}", e),
+            Err(e) => panic!("Failed to initialize logging: {:?}", e),
         }
     }
 }
@@ -816,7 +822,7 @@ impl SchedulerIncoming for Scheduler {
             let job_detail = entry.get();
             if job_detail.server_id != server_id {
                 bail!(
-                    "Job id {} is not registed on server {:?}",
+                    "Job id {} is not registered on server {:?}",
                     job_id,
                     server_id
                 )

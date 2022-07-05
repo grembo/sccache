@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 #[derive(Clone, Debug)]
-pub struct Diab;
+pub struct Diab {
+    pub version: Option<String>,
+}
 
 #[async_trait]
 impl CCompilerImpl for Diab {
@@ -41,6 +43,9 @@ impl CCompilerImpl for Diab {
     }
     fn plusplus(&self) -> bool {
         false
+    }
+    fn version(&self) -> Option<String> {
+        self.version.clone()
     }
     fn parse_arguments(
         &self,
@@ -403,7 +408,7 @@ impl<'a> Iterator for ExpandAtArgs<'a> {
             let file = self.cwd.join(&value);
             let res = File::open(&file).and_then(|mut f| f.read_to_string(&mut contents));
             if res.is_err() {
-                // Failed to read the file, so return the argumet as it is.
+                // Failed to read the file, so return the argument as it is.
                 // This will result in a CannotCache.
                 return Some(arg);
             }

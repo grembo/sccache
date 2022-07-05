@@ -119,7 +119,7 @@ pub struct RustupProxy {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedArguments {
-    /// The full commandline, with all parsed aguments
+    /// The full commandline, with all parsed arguments
     arguments: Vec<Argument<ArgData>>,
     /// The location of compiler outputs.
     output_dir: PathBuf,
@@ -609,7 +609,7 @@ impl RustupProxy {
         // `rustc +stable` returns retcode 1 (!=0) if it is installed via i.e. rpm packages
 
         // verify rustc is proxy
-        let mut child = creator.new_command_sync(compiler_executable.to_owned());
+        let mut child = creator.new_command_sync(compiler_executable);
         child.env_clear().envs(ref_env(env)).args(&["+stable"]);
         let state = run_input_output(child, None).await.map(move |output| {
             if output.status.success() {
@@ -625,7 +625,7 @@ impl RustupProxy {
             Ok(ProxyPath::Candidate(_)) => unreachable!("Q.E.D."),
             Ok(ProxyPath::ToBeDiscovered) => {
                 // simple check: is there a rustup in the same parent dir as rustc?
-                // that would be the prefered one
+                // that would be the preferred one
                 Ok(match compiler_executable.parent().map(Path::to_owned) {
                     Some(parent) => {
                         let proxy_candidate = parent.join(proxy_name);
@@ -672,7 +672,7 @@ impl RustupProxy {
             Ok(ProxyPath::None) => Ok(Ok(None)),
             Ok(ProxyPath::Candidate(proxy_executable)) => {
                 // verify the candidate is a rustup
-                let mut child = creator.new_command_sync(proxy_executable.to_owned());
+                let mut child = creator.new_command_sync(&proxy_executable);
                 child.env_clear().envs(ref_env(env)).args(&["--version"]);
                 let rustup_candidate_check = run_input_output(child, None).await?;
 
@@ -2204,7 +2204,7 @@ impl RlibDepReader {
         }
 
         // The goal of this cache is to avoid repeated lookups when building a single project. Let's budget 3MB.
-        // Allowing for a 100 byte path, 50 dependecies per rlib and 20 characters per crate name, this roughly
+        // Allowing for a 100 byte path, 50 dependencies per rlib and 20 characters per crate name, this roughly
         // approximates to `path_size + path + vec_size + num_deps * (systemtime_size + string_size + crate_name_len)`
         //                 `   3*8    +  100 +   3*8    +    50    * (      8         +     3*8     +       20      )`
         //                 `2748` bytes per crate

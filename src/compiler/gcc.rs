@@ -32,6 +32,7 @@ use crate::errors::*;
 #[derive(Clone, Debug)]
 pub struct Gcc {
     pub gplusplus: bool,
+    pub version: Option<String>,
 }
 
 #[async_trait]
@@ -41,6 +42,9 @@ impl CCompilerImpl for Gcc {
     }
     fn plusplus(&self) -> bool {
         self.gplusplus
+    }
+    fn version(&self) -> Option<String> {
+        self.version.clone()
     }
     fn parse_arguments(
         &self,
@@ -73,6 +77,7 @@ impl CCompilerImpl for Gcc {
             may_dist,
             self.kind(),
             rewrite_includes_only,
+            vec!["-P".to_string()],
         )
         .await
     }
@@ -246,6 +251,12 @@ where
     let mut language_extensions = true; // by default, GCC allows extensions
     let mut split_dwarf = false;
     let mut need_explicit_dep_target = false;
+    enum DepArgumentRequirePath {
+        NotNeeded,
+        Missing,
+        Provided,
+    }
+    let mut need_explicit_dep_argument_path = DepArgumentRequirePath::NotNeeded;
     let mut language = None;
     let mut compilation_flag = OsString::new();
     let mut profile_generate = false;
@@ -312,13 +323,20 @@ where
                 };
             }
             Some(Output(p)) => output_arg = Some(p.clone()),
-            Some(NeedDepTarget) => need_explicit_dep_target = true,
+            Some(NeedDepTarget) => {
+                need_explicit_dep_target = true;
+                if let DepArgumentRequirePath::NotNeeded = need_explicit_dep_argument_path {
+                    need_explicit_dep_argument_path = DepArgumentRequirePath::Missing;
+                }
+            }
             Some(DepTarget(s)) => {
                 dep_flag = OsString::from(arg.flag_str().expect("Dep target flag expected"));
                 dep_target = Some(s.clone());
             }
-            Some(DepArgumentPath(_))
-            | Some(ExtraHashFile(_))
+            Some(DepArgumentPath(_)) => {
+                need_explicit_dep_argument_path = DepArgumentRequirePath::Provided
+            }
+            Some(ExtraHashFile(_))
             | Some(PreprocessorArgumentFlag)
             | Some(PreprocessorArgument(_))
             | Some(PreprocessorArgumentPath(_))
@@ -508,6 +526,10 @@ where
         dependency_args.push(dep_flag);
         dependency_args.push(dep_target.unwrap_or_else(|| output.clone().into_os_string()));
     }
+    if let DepArgumentRequirePath::Missing = need_explicit_dep_argument_path {
+        dependency_args.push(OsString::from("-MF"));
+        dependency_args.push(Path::new(&output).with_extension("d").into_os_string());
+    }
     outputs.insert("obj", output);
 
     CompilerArguments::Ok(ParsedArguments {
@@ -536,6 +558,7 @@ fn preprocess_cmd<T>(
     may_dist: bool,
     kind: CCompilerKind,
     rewrite_includes_only: bool,
+    ignorable_whitespace_flags: Vec<String>,
 ) where
     T: RunCommand,
 {
@@ -552,7 +575,7 @@ fn preprocess_cmd<T>(
     // fails due to exceptions transitively included in the stdlib).
     // With -fprofile-generate line number information is important, so don't use -P.
     if !may_dist && !parsed_args.profile_generate {
-        cmd.arg("-P");
+        cmd.args(&ignorable_whitespace_flags);
     }
     if rewrite_includes_only {
         if parsed_args.suppress_rewrite_includes_only {
@@ -590,6 +613,7 @@ pub async fn preprocess<T>(
     may_dist: bool,
     kind: CCompilerKind,
     rewrite_includes_only: bool,
+    ignorable_whitespace_flags: Vec<String>,
 ) -> Result<process::Output>
 where
     T: CommandCreatorSync,
@@ -604,6 +628,7 @@ where
         may_dist,
         kind,
         rewrite_includes_only,
+        ignorable_whitespace_flags,
     );
     if log_enabled!(Trace) {
         trace!("preprocess: {:?}", cmd);
@@ -1224,6 +1249,7 @@ mod test {
             true,
             CCompilerKind::Gcc,
             true,
+            vec![],
         );
         // disable with extensions enabled
         assert!(!cmd.args.contains(&"-fdirectives-only".into()));
@@ -1248,6 +1274,7 @@ mod test {
             true,
             CCompilerKind::Gcc,
             true,
+            vec![],
         );
         // no reason to disable it with no extensions enabled
         assert!(cmd.args.contains(&"-fdirectives-only".into()));
@@ -1272,6 +1299,7 @@ mod test {
             true,
             CCompilerKind::Gcc,
             true,
+            vec![],
         );
         // disable with extensions enabled
         assert!(!cmd.args.contains(&"-fdirectives-only".into()));
@@ -1296,6 +1324,32 @@ mod test {
         assert_eq!(Language::C, language);
         assert_map_contains!(outputs, ("obj", PathBuf::from("foo.o")));
         assert_eq!(ovec!["-MF", "file", "-MD", "-MT", "foo.o"], dependency_args);
+        assert_eq!(ovec!["-fabc"], common_args);
+        assert!(!msvc_show_includes);
+    }
+
+    #[test]
+    fn test_parse_arguments_dep_target_and_file_needed() {
+        let args = stringvec!["-c", "foo/bar.c", "-fabc", "-o", "foo/bar.o", "-MMD"];
+        let ParsedArguments {
+            input,
+            language,
+            outputs,
+            dependency_args,
+            msvc_show_includes,
+            common_args,
+            ..
+        } = match parse_arguments_(args, false) {
+            CompilerArguments::Ok(args) => args,
+            o => panic!("Got unexpected parse result: {:?}", o),
+        };
+        assert_eq!(Some("foo/bar.c"), input.to_str());
+        assert_eq!(Language::C, language);
+        assert_map_contains!(outputs, ("obj", PathBuf::from("foo/bar.o")));
+        assert_eq!(
+            ovec!["-MMD", "-MT", "foo/bar.o", "-MF", "foo/bar.d"],
+            dependency_args
+        );
         assert_eq!(ovec!["-fabc"], common_args);
         assert!(!msvc_show_includes);
     }
