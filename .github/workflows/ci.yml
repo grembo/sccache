@@ -442,9 +442,7 @@ jobs:
           #
           ### Start sccache server ###########################################
           SCCACHE_ERROR_LOG=/tmp/sccache_log.txt SCCACHE_LOG=info \
-            RUST_LOG=info sccache --start-server &
-          SERVER_PID=$!
-          echo "SERVER PID IS: $SERVER_PID"
+            RUST_LOG=info sccache --start-server
           #
           ### First build with sccache-dist ##################################
           RUSTC_WRAPPER=sccache cargo build
@@ -498,13 +496,12 @@ jobs:
             exit 1
           fi
           #
-          ### Do test user cleanup
+          ### Test user cleanup
           sccache --stop-server
-          wait $SERVER_PID || true
           killall sccache-dist || true
           EOH
           #
-          ### Do root user cleanup
+          ### root user cleanup
           killall sccache-dist || true
           wait $BUILD_SERVER_PID || true
           #
