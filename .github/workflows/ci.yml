@@ -264,7 +264,7 @@ jobs:
         job:
           - { os: macos-10.15 , features: "dist-client,dist-server" } ## GHA MacOS-11.0 VM won't have VirtualBox; refs: <https://github.com/actions/virtual-environments/issues/4060> , <https://github.com/actions/virtual-environments/pull/4010>
     env:
-      mem: 2048
+      mem: 4096
     steps:
     - uses: actions/checkout@v3
     - uses: Swatinem/rust-cache@v1
